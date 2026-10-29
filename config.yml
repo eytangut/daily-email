@@ -1,0 +1,20 @@
+# ---- Daily email settings --------------------------------------------------
+timezone: Asia/Jerusalem     # which "today" the plugins see
+language: he
+direction: rtl               # rtl | ltr
+
+# Text templates. Available fields:
+#   {heb_date} {heb_day} {heb_month} {heb_year}   Hebrew date, e.g. י״ח בחשון תשפ״ז
+#   {weekday} {greg_date} {iso}                    e.g. חמישי / 29 באוקטובר 2026 / 2026-10-29
+subject: "תנ״ך להיום · {heb_day} ב{heb_month}"
+header:
+  title: "{heb_date}"
+  subtitle: "יום {weekday} · {greg_date}"
+
+# ---- Plugins: one or more cards per entry, in this order -------------------
+# "type" selects the plugin (plugins/<name>.py); all other keys go to it as options.
+# The same type may appear several times with different options.
+plugins:
+  - type: tanakh
+    title: תנ״ך
+    color: brown             # brown | blue | green | plum
