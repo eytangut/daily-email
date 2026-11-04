@@ -1,6 +1,9 @@
-"""Tanakh: all 929 chapters, spread evenly over the current Hebrew month."""
+"""Tanakh: all 929 chapters over the current Hebrew month (Psalms weigh 1/3 each, Ps. 119 double),
+days ending at book ends when close."""
+from bisect import bisect_left
+
 from dailymail import Item, Section, register
-from dailymail.helpers import heb, month_length, split_evenly
+from dailymail.helpers import heb, month_length
 
 # (Hebrew name, Sefaria name, chapters) -- totals 929
 BOOKS = [
@@ -23,12 +26,61 @@ BOOKS = [
 CHAPTERS = [(i, c) for i, (_, _, n) in enumerate(BOOKS) for c in range(1, n + 1)]
 assert len(CHAPTERS) == 929
 
+# Cumulative chapter counts at which a book ends (the last one is 929).
+BOOK_ENDS = []
+_total = 0
+for _he, _en, _n in BOOKS:
+    _total += _n
+    BOOK_ENDS.append(_total)
+
+# Reading weight of each chapter, in thirds of a normal chapter: a normal chapter is 3,
+# a Psalm is 1 (short), and Psalm 119 is 6 (double).
+PSALMS = next(i for i, (_, en, _n) in enumerate(BOOKS) if en == "Psalms")
+
+
+def _weight(book: int, ch: int) -> int:
+    if book != PSALMS:
+        return 3
+    return 6 if ch == 119 else 1
+
+
+# CUM[i] = weight of the first i chapters, so a day's load is CUM[end] - CUM[start].
+CUM = [0]
+for _b, _c in CHAPTERS:
+    CUM.append(CUM[-1] + _weight(_b, _c))
+
+# A day may end at a book's end if that is within this many normal chapters of the even
+# split (by weight). With ~28 weighted chapters/day this keeps days within roughly +-25%.
+TOLERANCE = 7
+
+
+def boundary(k: int, days: int, tolerance: int = TOLERANCE) -> int:
+    """Chapter index where day k ends (day k+1 starts); boundary(0)=0, boundary(days)=929.
+
+    The even split is made by reading weight, not chapter count. It then snaps to the
+    nearest book end within `tolerance` normal chapters. The same function gives each
+    day's start and the previous day's end, so days never overlap or leave gaps, and
+    since every boundary is anchored to the even split (not to the previous day) the
+    deviation never accumulates over the month. Tolerance must stay below half a day's
+    weight so boundaries remain in order.
+    """
+    if k <= 0:
+        return 0
+    if k >= days:
+        return len(CHAPTERS)
+    nominal = k * CUM[-1] // days
+    near = [e for e in BOOK_ENDS if abs(CUM[e] - nominal) <= tolerance * 3]
+    if near:
+        return min(near, key=lambda e: (abs(CUM[e] - nominal), e))
+    i = bisect_left(CUM, nominal)  # nearest chapter boundary by weight
+    return i if i == 0 or CUM[i] - nominal <= nominal - CUM[i - 1] else i - 1
+
 
 @register("tanakh")
-def build(ctx, title="תנ״ך", color="brown", **_):
+def build(ctx, title="תנ״ך", color="brown", tolerance=TOLERANCE, **_):
     hd = ctx.hebrew
     length = month_length(hd)
-    start, end = split_evenly(len(CHAPTERS), hd.day, length)
+    start, end = boundary(hd.day - 1, length, tolerance), boundary(hd.day, length, tolerance)
 
     groups = []  # [book index, first chapter, last chapter]
     for book, ch in CHAPTERS[start:end]:
