@@ -18,3 +18,25 @@ plugins:
   - type: tanakh
     title: תנ״ך
     color: brown             # brown | blue | green | plum
+    # Days are balanced by verse count x these multipliers (1.0 = normal; below 1 = easier,
+    # so more fits in a day; above 1 = harder). Keys are Sefaria book names; omitted books
+    # count as 1.0. Edit freely -- the whole month reshuffles to match.
+    difficulty:
+      Genesis: 0.7
+      Exodus: 0.7
+      Leviticus: 0.7
+      Numbers: 0.7
+      Deuteronomy: 0.7
+      Joshua: 0.7
+      Judges: 0.7
+      I_Samuel: 0.7
+      II_Samuel: 0.7
+      I_Kings: 0.7
+      II_Kings: 0.7
+      Psalms: 0.6
+      Ezekiel: 1.2
+      Job: 1.3
+      Daniel: 1.2
+    # How far (as a fraction of one day's reading, below 0.5) a day may stretch or shrink
+    # to end exactly at the end of a book.
+    tolerance: 0.25

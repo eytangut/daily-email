@@ -1,6 +1,12 @@
-"""Tanakh: all 929 chapters over the current Hebrew month (Psalms weigh 1/3 each, Ps. 119 double),
-days ending at book ends when close."""
+"""Tanakh: all 929 chapters over the current Hebrew month.
+
+Days are balanced by verse count (data from Sefaria, plugins/tanakh_verses.json) times a
+per-book difficulty multiplier from config.yml, and prefer to end at the end of a book.
+The email still shows chapters.
+"""
+import json
 from bisect import bisect_left
+from pathlib import Path
 
 from dailymail import Item, Section, register
 from dailymail.helpers import heb, month_length
@@ -33,68 +39,84 @@ for _he, _en, _n in BOOKS:
     _total += _n
     BOOK_ENDS.append(_total)
 
-# Reading weight of each chapter, in thirds of a normal chapter: a normal chapter is 3,
-# a Psalm is 1 (short), and Psalm 119 is 6 (double).
-PSALMS = next(i for i, (_, en, _n) in enumerate(BOOKS) if en == "Psalms")
+# Verses per chapter, per book (cached from Sefaria; regenerate with scripts/fetch_verses.py).
+VERSES = json.loads((Path(__file__).with_name("tanakh_verses.json")).read_text(encoding="utf-8"))
+for _he, _en, _n in BOOKS:
+    assert len(VERSES[_en]) == _n, f"verse data for {_en} does not match its chapter count"
+
+# A day may end at a book's end if that is within this fraction of a day's reading load
+# from the even split. Must stay below 0.5 so the boundaries remain in order.
+TOLERANCE = 0.25
 
 
-def _weight(book: int, ch: int) -> int:
-    if book != PSALMS:
-        return 3
-    return 6 if ch == 119 else 1
+def cumulative(difficulty: dict | None = None) -> list[float]:
+    """CUM[i] = reading weight of the first i chapters: verses * the book's multiplier."""
+    difficulty = difficulty or {}
+    unknown = set(difficulty) - {en for _, en, _ in BOOKS}
+    if unknown:
+        raise ValueError(f"difficulty: unknown book(s) {sorted(unknown)}")
+    cum = [0.0]
+    for book, ch in CHAPTERS:
+        en = BOOKS[book][1]
+        cum.append(cum[-1] + VERSES[en][ch - 1] * float(difficulty.get(en, 1.0)))
+    return cum
 
 
-# CUM[i] = weight of the first i chapters, so a day's load is CUM[end] - CUM[start].
-CUM = [0]
-for _b, _c in CHAPTERS:
-    CUM.append(CUM[-1] + _weight(_b, _c))
-
-# A day may end at a book's end if that is within this many normal chapters of the even
-# split (by weight). With ~28 weighted chapters/day this keeps days within roughly +-25%.
-TOLERANCE = 7
-
-
-def boundary(k: int, days: int, tolerance: int = TOLERANCE) -> int:
+def boundary(k: int, days: int, cum: list[float], tolerance: float = TOLERANCE) -> int:
     """Chapter index where day k ends (day k+1 starts); boundary(0)=0, boundary(days)=929.
 
-    The even split is made by reading weight, not chapter count. It then snaps to the
-    nearest book end within `tolerance` normal chapters. The same function gives each
-    day's start and the previous day's end, so days never overlap or leave gaps, and
-    since every boundary is anchored to the even split (not to the previous day) the
-    deviation never accumulates over the month. Tolerance must stay below half a day's
-    weight so boundaries remain in order.
+    Starts from the even split by weight, then snaps to the nearest book end within
+    `tolerance` of a day's load. The same function gives each day's start and the previous
+    day's end, so days never overlap or leave gaps, and since every boundary is anchored to
+    the even split (not to the previous day) the deviation never accumulates in the month.
     """
     if k <= 0:
         return 0
     if k >= days:
         return len(CHAPTERS)
-    nominal = k * CUM[-1] // days
-    near = [e for e in BOOK_ENDS if abs(CUM[e] - nominal) <= tolerance * 3]
+    day_weight = cum[-1] / days
+    nominal = k * day_weight
+    near = [e for e in BOOK_ENDS if abs(cum[e] - nominal) <= tolerance * day_weight]
     if near:
-        return min(near, key=lambda e: (abs(CUM[e] - nominal), e))
-    i = bisect_left(CUM, nominal)  # nearest chapter boundary by weight
-    return i if i == 0 or CUM[i] - nominal <= nominal - CUM[i - 1] else i - 1
+        return min(near, key=lambda e: (abs(cum[e] - nominal), e))
+    i = bisect_left(cum, nominal)  # nearest chapter boundary by weight
+    return i if i == 0 or cum[i] - nominal <= nominal - cum[i - 1] else i - 1
+
+
+def day_range(day: int, days: int, difficulty: dict | None = None,
+              tolerance: float = TOLERANCE) -> tuple[int, int]:
+    """Slice [start, end) of CHAPTERS to read on `day` (1-based) of a `days`-day month."""
+    cum = cumulative(difficulty)
+    return boundary(day - 1, days, cum, tolerance), boundary(day, days, cum, tolerance)
+
+
+def groups(start: int, end: int) -> list[list[int]]:
+    """Consecutive chapters grouped by book: [[book index, first chapter, last chapter], ...]."""
+    out = []
+    for book, ch in CHAPTERS[start:end]:
+        if out and out[-1][0] == book:
+            out[-1][2] = ch
+        else:
+            out.append([book, ch, ch])
+    return out
+
+
+def label(book: int, a: int, b: int) -> tuple[str, str]:
+    """(Hebrew book name, chapter text) for a group, e.g. ('בראשית', 'א׳–כ״ח')."""
+    return BOOKS[book][0], heb(a) if a == b else f"{heb(a)}–{heb(b)}"
 
 
 @register("tanakh")
-def build(ctx, title="תנ״ך", color="brown", tolerance=TOLERANCE, **_):
+def build(ctx, title="תנ״ך", color="brown", difficulty=None, tolerance=TOLERANCE, **_):
     hd = ctx.hebrew
     length = month_length(hd)
-    start, end = boundary(hd.day - 1, length, tolerance), boundary(hd.day, length, tolerance)
-
-    groups = []  # [book index, first chapter, last chapter]
-    for book, ch in CHAPTERS[start:end]:
-        if groups and groups[-1][0] == book:
-            groups[-1][2] = ch
-        else:
-            groups.append([book, ch, ch])
+    start, end = day_range(hd.day, length, difficulty, tolerance)
 
     items = []
-    for book, a, b in groups:
-        he, en, _n = BOOKS[book]
+    for book, a, b in groups(start, end):
+        en = BOOKS[book][1]
         ref = f"{en}.{a}" + (f"-{b}" if b != a else "")
-        value = heb(a) if a == b else f"{heb(a)}–{heb(b)}"
-        items.append(Item(he, value, f"https://www.sefaria.org/{ref}?lang=he"))
+        items.append(Item(BOOKS[book][0], label(book, a, b)[1], f"https://www.sefaria.org/{ref}?lang=he"))
 
     return Section(
         title=title, items=items, color=color,

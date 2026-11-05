@@ -8,6 +8,10 @@ Each **plugin** contributes one or more cards; `config.yml` decides which plugin
 2. Add secrets `SMTP_USER`, `SMTP_PASS` (Gmail app password), `MAIL_TO`.
 3. Actions -> "Daily email" -> Run workflow.
 
+Optional: Actions -> "Monthly calendar image" -> Run workflow emails a PNG calendar of the
+whole Hebrew month's readings (manual only; the optional date input picks another month).
+Locally: `python run.py --board --preview` writes `board.png`.
+
 Preview locally: `python run.py --preview 2026-10-29`, then open `preview.html`.
 
 ## Writing a plugin
@@ -35,3 +39,10 @@ plugins:
 `Section` except `title` are optional: `items`, `text`, `subtitle`, `meta`, `progress=(3, 30)`, `color`.
 A plugin that raises is logged and skipped; the rest of the email still goes out.
 `dailymail.helpers` has `heb()` (Hebrew numerals), `month_length()` and `split_evenly()`.
+
+## Tanakh plugin: how days are balanced
+Each day's reading is chosen by weight = verses (from Sefaria, cached in
+`plugins/tanakh_verses.json`; refresh with `python scripts/fetch_verses.py`) times a
+per-book difficulty multiplier from `config.yml`. Days stretch or shrink by up to
+`tolerance` (a fraction of a day's load) to end exactly at the end of a book. The email
+and calendar still show chapters.
